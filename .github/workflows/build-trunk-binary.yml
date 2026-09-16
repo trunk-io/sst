@@ -1,0 +1,81 @@
+name: build trunk binary
+
+# Trunk fork only. Builds the linux-x64 `sst` binary (with the S3 path-style
+# patch) and attaches it to a GitHub release on this fork. It does NOT publish to
+# npm, crates.io, PyPI, GHCR, AUR, or Homebrew — that is the stock `release.yml`,
+# which is guarded off on this fork. trunk2 downloads the asset in a pnpm patch.
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag for the linux-x64 binary"
+        required: true
+        default: "v4.15.2-trunk.1"
+
+concurrency: ${{ github.workflow }}-${{ github.ref }}
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ">=1.23.2"
+          cache: true
+
+      - name: Setup QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Install JS deps
+        run: bun i --frozen-lockfile
+
+      - name: Build platform (no registry push)
+        run: ./platform/scripts/build
+
+      # The binary reports version 4.15.2 so it uses the embedded 4.15.2 platform,
+      # which matches trunk2's pinned `sst@4.15.2`. The release tag is separate.
+      - name: Build sst-linux-x64
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+            go build -ldflags "-s -w -X main.version=4.15.2" \
+            -o sst-linux-x64 ./cmd/sst
+          sha256sum sst-linux-x64 | tee sst-linux-x64.sha256
+          ./sst-linux-x64 version
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ inputs.release_tag }}"
+          if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release upload "$TAG" --repo "${{ github.repository }}" --clobber \
+              sst-linux-x64 sst-linux-x64.sha256
+          else
+            gh release create "$TAG" --repo "${{ github.repository }}" \
+              --target "${{ github.sha }}" --title "$TAG" \
+              --notes "Trunk fork build of SST 4.15.2 with S3 path-style for the egress proxy. Binary version reports 4.15.2." \
+              sst-linux-x64 sst-linux-x64.sha256
+          fi
