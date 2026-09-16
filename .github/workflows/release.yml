@@ -15,6 +15,10 @@ permissions:
 
 jobs:
   goreleaser:
+    # Trunk fork guard: the full publish pipeline must never run on the
+    # fork. It publishes to npm/crates.io/PyPI/GHCR/AUR/Homebrew, which are
+    # owned by upstream. The trunk binary comes from build-trunk-binary.yml.
+    if: ${{ github.repository != 'trunk-io/sst' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

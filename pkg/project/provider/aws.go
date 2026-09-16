@@ -290,7 +290,7 @@ var steps = []bootstrapStep{
 		stateName := fmt.Sprintf("sst-state-%v", rand)
 		assetName := fmt.Sprintf("sst-asset-%v", rand)
 		slog.Info("creating bootstrap bucket", "name", assetName)
-		s3Client := s3.NewFromConfig(cfg)
+		s3Client := s3.NewFromConfig(cfg, usePathStyleS3)
 
 		var config *s3types.CreateBucketConfiguration = nil
 		if region != "us-east-1" {
@@ -382,7 +382,7 @@ var steps = []bootstrapStep{
 	func(ctx context.Context, cfg aws.Config, data *AwsBootstrapData) error {
 		slog.Info("cleaning up old bootstrap bucket", "name", data.Asset)
 		ssmClient := ssm.NewFromConfig(cfg)
-		s3Client := s3.NewFromConfig(cfg)
+		s3Client := s3.NewFromConfig(cfg, usePathStyleS3)
 
 		// Attempt to get the SSM parameter
 		ssmKey := "/sst/bootstrap/asset"
@@ -475,7 +475,7 @@ var steps = []bootstrapStep{
 
 	// Step: enforce bucket requests to use SSL
 	func(ctx context.Context, cfg aws.Config, data *AwsBootstrapData) error {
-		s3Client := s3.NewFromConfig(cfg)
+		s3Client := s3.NewFromConfig(cfg, usePathStyleS3)
 
 		// set partition based on region
 		partition := "aws"
@@ -557,7 +557,7 @@ func (a *AwsHome) getData(key, app, stage string) (io.Reader, error) {
 	if err != nil {
 		return nil, err
 	}
-	s3Client := s3.NewFromConfig(a.provider.config)
+	s3Client := s3.NewFromConfig(a.provider.config, usePathStyleS3)
 
 	result, err := s3Client.GetObject(context.TODO(), &s3.GetObjectInput{
 		Bucket: aws.String(bootstrap.State),
@@ -584,7 +584,7 @@ func (a *AwsHome) putData(key, app, stage string, data io.Reader) error {
 	if err != nil {
 		return err
 	}
-	s3Client := s3.NewFromConfig(a.provider.config)
+	s3Client := s3.NewFromConfig(a.provider.config, usePathStyleS3)
 
 	var contentEncoding *string
 	if a.compress {
@@ -614,7 +614,7 @@ func (a *AwsHome) removeData(key, app, stage string) error {
 	if err != nil {
 		return err
 	}
-	s3Client := s3.NewFromConfig(a.provider.config)
+	s3Client := s3.NewFromConfig(a.provider.config, usePathStyleS3)
 
 	_, err = s3Client.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
 		Bucket: aws.String(bootstrap.State),
@@ -632,7 +632,7 @@ func (a *AwsHome) cleanup(key, app, stage string) error {
 	if err != nil {
 		return err
 	}
-	s3Client := s3.NewFromConfig(a.provider.config)
+	s3Client := s3.NewFromConfig(a.provider.config, usePathStyleS3)
 
 	folderPrefix := path.Join(key, app, stage) + "/"
 	slog.Info("cleaning up folder", "bucket", bootstrap.State, "prefix", folderPrefix)
@@ -690,7 +690,7 @@ func (a *AwsHome) prune(app, stage string, retention int) error {
 	if err != nil {
 		return err
 	}
-	s3Client := s3.NewFromConfig(a.provider.config)
+	s3Client := s3.NewFromConfig(a.provider.config, usePathStyleS3)
 	prefix := path.Join("snapshot", app, stage) + "/"
 
 	var keys []string
@@ -797,7 +797,7 @@ func (a *AwsHome) purge(app, stage string) error {
 	if err != nil {
 		return err
 	}
-	s3Client := s3.NewFromConfig(a.provider.config)
+	s3Client := s3.NewFromConfig(a.provider.config, usePathStyleS3)
 
 	prefixes := []string{
 		a.pathForData("app", app, stage),
@@ -907,7 +907,7 @@ func (a *AwsHome) listStages(app string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	s3Client := s3.NewFromConfig(a.provider.config)
+	s3Client := s3.NewFromConfig(a.provider.config, usePathStyleS3)
 
 	data, err := s3Client.ListObjects(context.TODO(), &s3.ListObjectsInput{
 		Bucket: aws.String(bootstrap.State),
@@ -961,4 +961,14 @@ func (a *AwsHome) Bootstrap() error {
 		return err
 	}
 	return err
+}
+
+// usePathStyleS3 forces S3 path-style addressing on the engine's S3 clients.
+// The trunk egress proxy (trunk-cloud ADR-0072) supports path-style only. It
+// rebuilds the target host from the SigV4 scope, so the bucket must arrive in
+// the URL path. A virtual-hosted host (<bucket>.<proxy-host>) has no wildcard
+// DNS record, so the lookup fails. Path-style also works against real AWS, so
+// this is safe for a direct (non-proxy) egress too.
+func usePathStyleS3(o *s3.Options) {
+	o.UsePathStyle = true
 }
